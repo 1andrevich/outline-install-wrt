@@ -170,9 +170,9 @@ start() {
 }
 EOL
 #Checks rc.local and adds script to rc.local to check default route on startup
-if ! grep -q "sleep 20" /etc/rc.local; then
+if ! grep -q "sleep 10" /etc/rc.local; then
 sed '/exit 0/i\
-sleep 20\
+sleep 10\
 #Check if default route is through Outline and change if not\
 if ! ip route | grep -q '\''^default via 172.16.10.2 dev tun1'\''; then\
     /etc/init.d/tun2socks start\
