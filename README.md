@@ -32,5 +32,3 @@ You'll be asked for:
     chmod +x install_outline_ram.sh
     ./install_outline_ram.sh
 
-
-If you have any question, please read the FAQ first. Feel free to contact.
