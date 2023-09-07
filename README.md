@@ -15,6 +15,7 @@ Check if you have kmod-tun and ip-full installed, if not run:
     opkg install kmod-tun ip-full
 
 Then run the script:
+You'll need at least **9 MiB of free space** on /
 
     ./install_outline.sh
 
