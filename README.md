@@ -32,3 +32,5 @@ You'll be asked for:
     chmod +x install_outline_ram.sh
     ./install_outline_ram.sh
 
+
+If you have problems with raw.githubusercontent.com access, try mirror of this project **(https://sourceforge.net/projects/outline-install-wrt/)**
