@@ -1,6 +1,7 @@
 #!/bin/sh
-# Outline scripted, xjasonlyu/tun2socks based installer for OpenWRT.
-# https://github.com/1andrevich/outline-install-wrt
+# Modified Outline scripted installer for OpenWRT
+# Fixes SSH disconnection on subsequent runs
+
 echo 'Starting Outline OpenWRT install script'
 
 # Step 1: Check for kmod-tun
@@ -8,37 +9,42 @@ opkg list-installed | grep kmod-tun > /dev/null
 if [ $? -ne 0 ]; then
     echo "kmod-tun is not installed. Exiting."
     exit 1
-    echo 'kmod-tun installed'
 fi
+echo 'kmod-tun installed'
 
 # Step 2: Check for ip-full
 opkg list-installed | grep ip-full > /dev/null
 if [ $? -ne 0 ]; then
     echo "ip-full is not installed. Exiting."
     exit 1
-    echo 'ip-full installed'
 fi
+echo 'ip-full installed'
 
-# Step 3: Check for tun2socks then download tun2socks binary from GitHub
-if [ ! -f "/tmp/tun2socks*" ]; then
-ARCH=$(grep "OPENWRT_ARCH" /etc/os-release | awk -F '"' '{print $2}')
-wget https://github.com/1andrevich/outline-install-wrt/releases/download/v2.5.1/tun2socks-linux-$ARCH -O /tmp/tun2socks
- # Check wget's exit status
-    if [ $? -ne 0 ]; then
-        echo "Download failed. No file for your Router's architecture"
-        exit 1
-   fi
-fi
-# Step 4: Check for tun2socks then move binary to /usr/bin
+# Step 3: Check for tun2socks then download if needed
+NEED_RESTART=0
 if [ ! -f "/usr/bin/tun2socks" ]; then
-mv /tmp/tun2socks /usr/bin/
-echo 'moving tun2socks to /usr/bin'
-chmod +x /usr/bin/tun2socks
+    if [ ! -f "/tmp/tun2socks" ]; then
+        ARCH=$(grep "OPENWRT_ARCH" /etc/os-release | awk -F '"' '{print $2}')
+        echo "Downloading tun2socks for architecture: $ARCH"
+        wget https://github.com/1andrevich/outline-install-wrt/releases/download/v2.5.1/tun2socks-linux-$ARCH -O /tmp/tun2socks
+        if [ $? -ne 0 ]; then
+            echo "Download failed. No file for your Router's architecture"
+            exit 1
+        fi
+    fi
+    
+    # Step 4: Move to /usr/bin and set permissions
+    mv /tmp/tun2socks /usr/bin/
+    echo 'moving tun2socks to /usr/bin'
+    chmod +x /usr/bin/tun2socks
+    NEED_RESTART=1
+else
+    echo 'tun2socks already installed'
 fi
 
-# Step 5: Check for existing config in /etc/config/network then add entry
+# Step 5: Check for existing config in /etc/config/network
 if ! grep -q "config interface 'tunnel'" /etc/config/network; then
-echo "
+    echo "
 config interface 'tunnel'
     option device 'tun1'
     option proto 'static'
@@ -46,12 +52,13 @@ config interface 'tunnel'
     option netmask '255.255.255.252'
 " >> /etc/config/network
     echo 'added entry into /etc/config/network'
+    NEED_RESTART=1
 fi
 echo 'found entry into /etc/config/network'
 
-# Step 6:Check for existing config /etc/config/firewall then add entry
-if ! grep -q "option name 'proxy'" /etc/config/firewall; then 
-echo "
+# Step 6: Check for existing config /etc/config/firewall
+if ! grep -q "option name 'proxy'" /etc/config/firewall; then
+    echo "
 config zone
     option name 'proxy'
     list network 'tunnel'
@@ -70,137 +77,105 @@ config forwarding
     option family 'ipv4'
 " >> /etc/config/firewall
     echo 'added entry into /etc/config/firewall'
+    NEED_RESTART=1
+fi
+echo 'found entry into /etc/config/firewall'
+
+# Step 7: Only restart network if changes were made
+if [ $NEED_RESTART -eq 1 ]; then
+    echo 'Changes detected, restarting network...'
+    /etc/init.d/network restart
+    echo 'Network restarted, waiting for stabilization...'
+    sleep 5
+else
+    echo 'No network changes needed, skipping restart'
 fi
 
-echo 'found entry into /etc/config/firewall'
-# Step 7: Restart network
-/etc/init.d/network restart
-echo 'Restarting Network....'
-
-# Step 8: Read user variable for OUTLINE HOST IP
+# Step 8: Read user variables
 read -p "Enter Outline Server IP: " OUTLINEIP
-# Read user variable for Outline config
 read -p "Enter Outline (Shadowsocks) Config (format ss://base64coded@HOST:PORT/?outline=1): " OUTLINECONF
 
-#Step 9. Check for default gateway and save it into DEFGW
+# Step 9: Check for default gateway
 DEFGW=$(ip route | grep default | awk '{print $3}')
-echo 'checked default gateway'
+echo "Default gateway: $DEFGW"
 
-#Step 10. Check for default interface and save it into DEFIF
+# Step 10: Check for default interface
 DEFIF=$(ip route | grep default | awk '{print $5}')
-echo 'checked default interface'
+echo "Default interface: $DEFIF"
 
-# Step 11: Create script /etc/init.d/tun2socks
+# Step 11: Create init script if it doesn't exist
 if [ ! -f "/etc/init.d/tun2socks" ]; then
 cat <<EOL > /etc/init.d/tun2socks
 #!/bin/sh /etc/rc.common
+
 USE_PROCD=1
-
-# starts after network starts
 START=99
-# stops before networking stops
 STOP=89
-
-#PROG=/usr/bin/tun2socks
-#IF="tun1"
-#OUTLINE_CONFIG="$OUTLINECONF"
-#LOGLEVEL="warning"
-#BUFFER="64kb"
 
 start_service() {
     procd_open_instance
     procd_set_param user root
-    procd_set_param command /usr/bin/tun2socks -device tun1 -tcp-rcvbuf 64kb -tcp-sndbuf 64kb  -proxy "$OUTLINECONF" -loglevel "warning"
+    procd_set_param command /usr/bin/tun2socks -device tun1 -tcp-rcvbuf 64kb -tcp-sndbuf 64kb -proxy "$OUTLINECONF" -loglevel "warning"
     procd_set_param stdout 1
     procd_set_param stderr 1
-    procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
+    procd_set_param respawn
     procd_close_instance
-    ip route add "$OUTLINEIP" via "$DEFGW" #Adds route to OUTLINE Server
-	echo 'route to Outline Server added'
-    ip route save default > /tmp/defroute.save  #Saves existing default route
-    echo "tun2socks is working!"
-}
-
-boot() {
-    # This gets run at boot-time.
-    start
-}
-
-shutdown() {
-    # This gets run at shutdown/reboot.
-    stop
+    
+    # Add route to Outline server
+    ip route add "$OUTLINEIP" via "$DEFGW" 2>/dev/null
+    echo 'route to Outline Server added'
+    
+    # Save default route
+    ip route save default > /tmp/defroute.save
+    echo "tun2socks service started"
 }
 
 stop_service() {
-    service_stop /usr/bin/tun2socks
-    ip route restore default < /tmp/defroute.save #Restores saved default route
-    ip route del "$OUTLINEIP" via "$DEFGW" #Removes route to OUTLINE Server
-    echo "tun2socks has stopped!"
+    # Restore default route if backup exists
+    if [ -f "/tmp/defroute.save" ]; then
+        ip route restore default < /tmp/defroute.save
+    fi
+    
+    # Remove route to Outline server
+    ip route del "$OUTLINEIP" via "$DEFGW" 2>/dev/null
+    echo "tun2socks service stopped"
 }
 
-reload_service() {
-    stop
-    sleep 3s
-    echo "tun2socks restarted!"
+service_started() {
+    echo 'Checking if default gateway should be changed...'
+    sleep 3
+    
+    # Check if user wants Outline as default gateway
+    read -p "Do you want to use Outline (shadowsocks) as your default gateway? (y/n): " DEFAULT_GW
+    
+    if [ "$DEFAULT_GW" = "y" ] || [ "$DEFAULT_GW" = "Y" ]; then
+        if ip link show tun1 | grep -q "UP"; then
+            ip route del default
+            ip route add default via 172.16.10.2 dev tun1
+            echo 'Default gateway changed to Outline tunnel'
+        fi
+    fi
+}
+
+boot() {
     start
 }
 EOL
-DEFAULT_GATEWAY=""
-#Ask user to use Outline as default gateway
-while [ "$DEFAULT_GATEWAY" != "y" ] && [ "$DEFAULT_GATEWAY" != "n" ]; do
-    echo "Use Outline as default gateway? [y/n]: "
-    read DEFAULT_GATEWAY
-done
 
-if [ "$DEFAULT_GATEWAY" = "y" ]; then
-		cat <<EOL >> /etc/init.d/tun2socks
-#Replaces default route for Outline
-service_started() {
-    # This function checks if the default gateway is Outline, if no changes it
-     echo 'Replacing default gateway for Outline...'
-     sleep 2s
-     if ip link show tun1 | grep -q "UP" ; then
-         ip route del default #Deletes existing default route
-         ip route add default via 172.16.10.2 dev tun1 #Creates default route through the proxy
-     fi
-}
-start() {
-    start_service
-    service_started
-}
-EOL
-#Checks rc.local and adds script to rc.local to check default route on startup
-if ! grep -q "sleep 10" /etc/rc.local; then
-sed '/exit 0/i\
-sleep 10\
-#Check if default route is through Outline and change if not\
-if ! ip route | grep -q '\''^default via 172.16.10.2 dev tun1'\''; then\
-    /etc/init.d/tun2socks start\
-fi\
-' /etc/rc.local > /tmp/rc.local.tmp && mv /tmp/rc.local.tmp /etc/rc.local
-		echo "All traffic would be routed through Outline"
-fi
-	else
-		cat <<EOL >> /etc/init.d/tun2socks
-start() {
-    start_service
-}
-EOL
-		echo "No changes to default gateway"
+    chmod +x /etc/init.d/tun2socks
+    echo 'created /etc/init.d/tun2socks'
+else
+    echo '/etc/init.d/tun2socks already exists'
 fi
 
-echo 'script /etc/init.d/tun2socks created'
-
-chmod +x /etc/init.d/tun2socks
-fi
-
-# Step 12: Create symbolic link
+# Step 12: Enable autostart
 if [ ! -f "/etc/rc.d/S99tun2socks" ]; then
-ln -s /etc/init.d/tun2socks /etc/rc.d/S99tun2socks
-echo '/etc/init.d/tun2socks /etc/rc.d/S99tun2socks symlink created'
+    /etc/init.d/tun2socks enable
+    echo 'enabled tun2socks autostart'
 fi
 
-# Step 13: Start service
+# Step 13: Start the service
+echo 'Starting tun2socks service...'
 /etc/init.d/tun2socks start
 
-echo 'Script finished'
+echo 'Script finished successfully!'
