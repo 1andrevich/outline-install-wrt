@@ -104,13 +104,13 @@ STOP=89
 #PROG=/usr/bin/tun2socks
 #IF="tun1"
 #OUTLINE_CONFIG="$OUTLINECONF"
-#LOGLEVEL="warning"
+#LOGLEVEL="warn"
 #BUFFER="64kb"
 
 start_service() {
     procd_open_instance
     procd_set_param user root
-    procd_set_param command /usr/bin/tun2socks -device tun1 -tcp-rcvbuf 64kb -tcp-sndbuf 64kb  -proxy "$OUTLINECONF" -loglevel "warning"
+    procd_set_param command /usr/bin/tun2socks -device tun1 -tcp-rcvbuf 64kb -tcp-sndbuf 64kb  -proxy "$OUTLINECONF" -loglevel "warn"
     procd_set_param stdout 1
     procd_set_param stderr 1
     procd_set_param respawn "${respawn_threshold:-3600}" "${respawn_timeout:-5}" "${respawn_retry:-5}"
